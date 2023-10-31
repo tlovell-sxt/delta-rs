@@ -5,30 +5,37 @@
 //! the writer. Once written, add actions are returned by the writer. It's the users responsibility
 //! to create the transaction using those actions.
 
-use std::{collections::HashMap, sync::Arc};
-
-use arrow::array::{Array, UInt32Array};
-use arrow::compute::{partition, take};
-use arrow::record_batch::RecordBatch;
+use super::{
+    stats::create_add,
+    utils::{
+        arrow_schema_without_partitions, next_data_path, record_batch_without_partitions,
+        stringified_partition_value, PartitionPath, ShareableBuffer,
+    },
+    DeltaWriter, DeltaWriterError,
+};
+use crate::{
+    errors::DeltaTableError,
+    protocol::Add,
+    storage::DeltaObjectStore,
+    table::{builder::DeltaTableBuilder, DeltaTableMetaData},
+    DeltaTable, Schema,
+};
+use arrow::{
+    array::{Array, UInt32Array},
+    compute::{lexicographical_partition_ranges, take, SortColumn},
+    record_batch::RecordBatch,
+};
 use arrow_array::ArrayRef;
 use arrow_row::{RowConverter, SortField};
 use arrow_schema::{ArrowError, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use bytes::Bytes;
 use object_store::{path::Path, ObjectStore};
-use parquet::{arrow::ArrowWriter, errors::ParquetError};
-use parquet::{basic::Compression, file::properties::WriterProperties};
-use uuid::Uuid;
-
-use super::stats::create_add;
-use super::utils::{
-    arrow_schema_without_partitions, next_data_path, record_batch_without_partitions,
-    stringified_partition_value, PartitionPath, ShareableBuffer,
+use parquet::{
+    arrow::ArrowWriter, basic::Compression, errors::ParquetError,
+    file::properties::WriterProperties,
 };
-use super::{DeltaWriter, DeltaWriterError};
-use crate::errors::DeltaTableError;
-use crate::table::builder::DeltaTableBuilder;
-use crate::table::DeltaTableMetaData;
-use crate::{protocol::Add, storage::DeltaObjectStore, DeltaTable, Schema};
+use std::{collections::HashMap, sync::Arc};
+use uuid::Uuid;
 
 /// Writes messages to a delta lake table.
 pub struct RecordBatchWriter {
@@ -343,19 +350,24 @@ pub(crate) fn divide_by_partition_values(
     let indices = lexsort_to_indices(sort_columns.columns());
     let sorted_partition_columns = partition_columns
         .iter()
-        .map(|c| Ok(take(values.column(schema.index_of(c)?), &indices, None)?))
+        .map(|c| {
+            Ok(SortColumn {
+                values: take(values.column(schema.index_of(c)?), &indices, None)?,
+                options: None,
+            })
+        })
         .collect::<Result<Vec<_>, DeltaWriterError>>()?;
 
-    let partition_ranges = partition(sorted_partition_columns.as_slice())?;
+    let partition_ranges = lexicographical_partition_ranges(sorted_partition_columns.as_slice())?;
 
-    for range in partition_ranges.ranges().into_iter() {
+    for range in partition_ranges {
         // get row indices for current partition
         let idx: UInt32Array = (range.start..range.end)
             .map(|i| Some(indices.value(i)))
             .collect();
 
         let partition_key_iter = sorted_partition_columns.iter().map(|col| {
-            stringified_partition_value(&col.slice(range.start, range.end - range.start))
+            stringified_partition_value(&col.values.slice(range.start, range.end - range.start))
         });
 
         let mut partition_values = HashMap::new();
