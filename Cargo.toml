@@ -26,12 +26,12 @@ arrow-select = { version = "45" }
 parquet = { version = "45" }
 
 # datafusion
-datafusion = { version = "31" }
-datafusion-expr = { version = "31" }
-datafusion-common = { version = "31" }
-datafusion-proto = { version = "31" }
-datafusion-sql = { version = "31" }
-datafusion-physical-expr = { version = "31" }
+datafusion = { version = "30" }
+datafusion-expr = { version = "30" }
+datafusion-common = { version = "30" }
+datafusion-proto = { version = "30" }
+datafusion-sql = { version = "30" }
+datafusion-physical-expr = { version = "30" }
 
 # serde
 serde = { version = "1", features = ["derive"] }
